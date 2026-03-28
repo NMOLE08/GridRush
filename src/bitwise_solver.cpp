@@ -1,4 +1,5 @@
 #include "bitwise_solver.h"
+#include "log_translator.h"
 
 #include <algorithm>
 #include <bitset>
@@ -41,6 +42,8 @@ bool BitwiseSudokuSolver::solve() {
     solved_ = false;
     uniqueness_checked_ = false;
     unique_ = false;
+    solution_count_ = -1;
+    solution_count_complete_ = false;
 
     if (!initialize_domains()) {
         logs_.push_back("Initial puzzle is contradictory during domain initialization.");
@@ -86,10 +89,21 @@ bool BitwiseSudokuSolver::solve() {
         fresh[cell] &= static_cast<uint16_t>(digit_to_mask(1) | digit_to_mask(3) | digit_to_mask(5) | digit_to_mask(7) | digit_to_mask(9));
     }
 
-    const int found = count_solutions(fresh, first_solution, 1);
+    const int configured_limit = (definition_.max_solution_count > 0) ? definition_.max_solution_count : 5000;
+    const int additional_limit = std::max(1, configured_limit - 1);
+    const int found = count_solutions(fresh, first_solution, additional_limit);
+
     unique_ = (found == 0);
-    logs_.push_back(unique_ ? "Uniqueness check: solution is unique."
-                            : "Uniqueness check: an additional distinct solution exists.");
+    solution_count_ = 1 + found;
+    solution_count_complete_ = (found < additional_limit);
+
+    if (unique_) {
+        logs_.push_back("Uniqueness check: solution is unique.");
+    } else if (solution_count_complete_) {
+        logs_.push_back("Uniqueness check: puzzle is not unique; counted " + std::to_string(solution_count_) + " valid solutions.");
+    } else {
+        logs_.push_back("Uniqueness check: puzzle is not unique; counted at least " + std::to_string(solution_count_) + " solutions before reaching the configured cap.");
+    }
     return true;
 }
 
@@ -103,6 +117,14 @@ bool BitwiseSudokuSolver::is_uniqueness_checked() const {
 
 bool BitwiseSudokuSolver::is_unique() const {
     return unique_;
+}
+
+int BitwiseSudokuSolver::solution_count() const {
+    return solution_count_;
+}
+
+bool BitwiseSudokuSolver::solution_count_complete() const {
+    return solution_count_complete_;
 }
 
 std::array<int, kCellCount> BitwiseSudokuSolver::solved_grid() const {
@@ -352,11 +374,23 @@ bool BitwiseSudokuSolver::apply_binary_edge(int edge_idx) {
         if (!supported) remove_b |= bb;
     }
 
+    auto relation_reason_for = [&](int other_cell) {
+        if (e.relation == BinaryRelation::LessThan) {
+            std::ostringstream oss;
+            oss << "Thermo increasing path constraint with " << rc_label(other_cell);
+            if (is_singleton(domains_[other_cell])) {
+                oss << "=" << singleton_digit(domains_[other_cell]);
+            }
+            return oss.str();
+        }
+        return e.reason + " with " + rc_label(other_cell);
+    };
+
     if (remove_a != 0) {
-        if (!remove_candidates(e.a, remove_a, e.reason + " with " + rc_label(e.b))) return false;
+        if (!remove_candidates(e.a, remove_a, relation_reason_for(e.b))) return false;
     }
     if (remove_b != 0) {
-        if (!remove_candidates(e.b, remove_b, e.reason + " with " + rc_label(e.a))) return false;
+        if (!remove_candidates(e.b, remove_b, relation_reason_for(e.a))) return false;
     }
 
     return domains_[e.a] != 0 && domains_[e.b] != 0;
@@ -527,7 +561,9 @@ bool BitwiseSudokuSolver::apply_arrow(int arrow_idx) {
         if (!sums.test(d)) remove_circle |= bit;
     }
     if (remove_circle != 0) {
-        if (!remove_candidates(arrow.circle_cell, remove_circle, "Arrow circle equals path sum constraint")) {
+        if (!remove_candidates(arrow.circle_cell,
+                               remove_circle,
+                               "Arrow circle equals path sum constraint (max circle " + std::to_string(max_digit(domains_[arrow.circle_cell])) + ")")) {
             return false;
         }
     }
@@ -569,7 +605,9 @@ bool BitwiseSudokuSolver::apply_arrow(int arrow_idx) {
         }
 
         if (remove != 0) {
-            if (!remove_candidates(cell, remove, "Arrow path-to-circle sum constraint")) {
+            if (!remove_candidates(cell,
+                                   remove,
+                                   "Arrow path-to-circle sum constraint (max circle " + std::to_string(max_digit(domains_[arrow.circle_cell])) + ")")) {
                 return false;
             }
         }
@@ -608,24 +646,27 @@ bool BitwiseSudokuSolver::remove_candidates(int cell, uint16_t remove_mask, cons
     const uint16_t actual_remove = static_cast<uint16_t>(domains_[cell] & remove_mask);
     if (actual_remove == 0) return true;
 
+    const uint16_t resulting_domain = static_cast<uint16_t>(domains_[cell] & static_cast<uint16_t>(~actual_remove));
+
     for (int d = 1; d <= 9; ++d) {
         const uint16_t bit = digit_to_mask(d);
         if ((actual_remove & bit) != 0) {
-            log_candidate_removal(cell, d, reason);
+            log_candidate_removal(cell, d, reason, resulting_domain);
         }
     }
 
-    domains_[cell] = static_cast<uint16_t>(domains_[cell] & static_cast<uint16_t>(~actual_remove));
+    domains_[cell] = resulting_domain;
     if (domains_[cell] == 0) return false;
 
     enqueue(cell);
     return true;
 }
 
-void BitwiseSudokuSolver::log_candidate_removal(int cell, int digit, const std::string& reason) {
-    std::ostringstream oss;
-    oss << rc_label(cell) << " candidate " << digit << " removed due to " << reason;
-    logs_.push_back(oss.str());
+void BitwiseSudokuSolver::log_candidate_removal(int cell,
+                                                int digit,
+                                                const std::string& reason,
+                                                uint16_t resulting_domain) {
+    logs_.push_back(LogTranslator::translate_candidate_removal(definition_, cell, digit, reason, resulting_domain));
 }
 
 bool BitwiseSudokuSolver::is_singleton(uint16_t domain) {
@@ -690,7 +731,8 @@ bool BitwiseSudokuSolver::dfs_with_logging(int depth) {
         BitwiseSudokuSolver branch = *this;
         {
             std::ostringstream oss;
-            oss << "DFS guess at depth " << depth << ": set " << rc_label(best_cell) << " = " << d;
+            oss << "Testing assumption at depth " << depth << ": place " << d
+                << " in " << rc_label(best_cell) << ".";
             branch.logs_.push_back(oss.str());
         }
 
@@ -699,7 +741,8 @@ bool BitwiseSudokuSolver::dfs_with_logging(int depth) {
 
         if (!branch.propagate()) {
             std::ostringstream oss;
-            oss << "Backtrack: guess " << rc_label(best_cell) << " = " << d << " led to contradiction";
+            oss << "Assumption " << rc_label(best_cell) << "=" << d
+                << " creates a contradiction. Reverting.";
             logs_.push_back(oss.str());
             continue;
         }
@@ -710,7 +753,8 @@ bool BitwiseSudokuSolver::dfs_with_logging(int depth) {
         }
 
         std::ostringstream oss;
-        oss << "Backtrack: guess " << rc_label(best_cell) << " = " << d << " failed downstream";
+        oss << "Assumption " << rc_label(best_cell) << "=" << d
+            << " does not lead to a full solution. Reverting.";
         logs_.push_back(oss.str());
     }
 

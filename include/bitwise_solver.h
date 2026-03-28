@@ -28,6 +28,8 @@ public:
     bool is_solved() const;
     bool is_uniqueness_checked() const;
     bool is_unique() const;
+    int solution_count() const;
+    bool solution_count_complete() const;
 
     std::array<int, kCellCount> solved_grid() const;
     const std::vector<std::string>& logs() const;
@@ -55,6 +57,8 @@ private:
     bool solved_ = false;
     bool uniqueness_checked_ = false;
     bool unique_ = false;
+    int solution_count_ = -1;
+    bool solution_count_complete_ = false;
     std::vector<std::string> logs_;
 
     void build_indices();
@@ -75,7 +79,7 @@ private:
                                             int fixed_digit);
 
     bool remove_candidates(int cell, uint16_t remove_mask, const std::string& reason);
-    void log_candidate_removal(int cell, int digit, const std::string& reason);
+    void log_candidate_removal(int cell, int digit, const std::string& reason, uint16_t resulting_domain);
 
     static bool is_singleton(uint16_t domain);
     static int singleton_digit(uint16_t domain);

@@ -1,4 +1,5 @@
 #include "classic_dlx_solver.h"
+#include "log_translator.h"
 
 #include <array>
 #include <sstream>
@@ -164,7 +165,7 @@ struct Dlx {
         }
 
         if (nodes[0].right == 0) {
-            log_step(depth, "Exact cover complete: one solution found.");
+            log_step(depth, LogTranslator::translate_solution_found());
             ++solution_count;
             if (first_solution.empty()) {
                 first_solution = partial;
@@ -176,53 +177,39 @@ struct Dlx {
         }
 
         const int col = choose_column();
+        const auto trigger = LogTranslator::decode_constraint_column(col).kind;
         if (col_size[col] == 0) {
-            log_step(depth, "Dead end: selected constraint column has zero candidates. Backtrack.");
+            log_step(depth, LogTranslator::translate_dead_end());
             return;
         }
 
-        {
-            std::ostringstream oss;
-            oss << "Choose constraint column C" << col << " (candidate rows=" << col_size[col] << ").";
-            log_step(depth, oss.str());
-        }
+        log_step(depth, LogTranslator::translate_choose_column(col, col_size[col]));
 
         cover(col);
-        log_step(depth, "Cover selected column and iterate candidate rows.");
         for (int r = nodes[col].down; r != col; r = nodes[r].down) {
             const int row_id = nodes[r].row_id;
-            log_step(depth, "Try row " + describe_row(row_id) + ".");
+            const RowInfo& info = row_infos[row_id];
+            log_step(depth, LogTranslator::translate_try_row(info.r, info.c, info.d, trigger));
             partial.push_back(nodes[r].row_id);
             for (int j = nodes[r].right; j != r; j = nodes[j].right) {
-                {
-                    std::ostringstream oss;
-                    oss << "Cover linked constraint column C" << nodes[j].col << ".";
-                    log_step(depth + 1, oss.str());
-                }
+                log_step(depth + 1, LogTranslator::translate_linked_constraint(nodes[j].col));
                 cover(nodes[j].col);
             }
 
             search(depth + 1);
 
             for (int j = nodes[r].left; j != r; j = nodes[j].left) {
-                {
-                    std::ostringstream oss;
-                    oss << "Uncover linked constraint column C" << nodes[j].col << ".";
-                    log_step(depth + 1, oss.str());
-                }
                 uncover(nodes[j].col);
             }
             partial.pop_back();
-
-            log_step(depth, "Backtrack from row " + describe_row(row_id) + ".");
+            log_step(depth, LogTranslator::translate_backtrack_row(info.r, info.c, info.d));
 
             if (solution_count >= limit) {
-                log_step(depth, "Stop search: solution limit reached.");
+                log_step(depth, "Configured solution cap reached for this run.");
                 break;
             }
         }
         uncover(col);
-        log_step(depth, "Uncover selected constraint column and return.");
     }
 };
 
@@ -252,10 +239,10 @@ bool is_classic_only(const PuzzleDefinition& puzzle) {
 ClassicDlxResult solve_classic_with_dlx(const PuzzleDefinition& puzzle) {
     ClassicDlxResult result;
     result.solved_grid.fill(0);
-    result.logs.push_back("Algorithm: Classic Sudoku solved with Algorithm X (Dancing Links).");
+    result.logs.push_back("Classic Sudoku reasoning mode is active.");
 
     if (!is_classic_only(puzzle)) {
-        result.logs.push_back("DLX solver only handles classic constraints.");
+        result.logs.push_back(LogTranslator::translate_solver_scope());
         return result;
     }
 
@@ -278,11 +265,11 @@ ClassicDlxResult solve_classic_with_dlx(const PuzzleDefinition& puzzle) {
     const bool wants_uniqueness = puzzle.check_uniqueness || wants_all_solution_count;
     const int configured_limit = (puzzle.max_solution_count > 0) ? puzzle.max_solution_count : 5000;
     dlx.limit = wants_all_solution_count ? configured_limit : (wants_uniqueness ? 2 : 1);
-    result.logs.push_back("DLX initialization complete. Start Algorithm X search.");
+    result.logs.push_back(LogTranslator::translate_search_start());
     dlx.search(0);
 
     if (dlx.solution_count == 0 || dlx.first_solution.empty()) {
-        result.logs.push_back("DLX search found no exact cover solution.");
+        result.logs.push_back(LogTranslator::translate_no_solution());
         return result;
     }
 
@@ -300,19 +287,9 @@ ClassicDlxResult solve_classic_with_dlx(const PuzzleDefinition& puzzle) {
     }
 
     if (wants_all_solution_count) {
-        std::ostringstream oss;
-        oss << "DLX counted " << dlx.solution_count << " solution(s)";
-        if (dlx.hit_limit) {
-            oss << " and hit the configured cap of " << dlx.limit << ".";
-        } else {
-            oss << " with full count completion.";
-        }
-        result.logs.push_back(oss.str());
+        result.logs.push_back(LogTranslator::translate_count_summary(dlx.solution_count, dlx.hit_limit, dlx.limit));
     } else if (wants_uniqueness) {
-        std::ostringstream oss;
-        oss << "DLX explored exact cover and found " << dlx.solution_count
-            << (dlx.solution_count == 1 ? " solution (unique within limit)." : " solutions (not unique).");
-        result.logs.push_back(oss.str());
+        result.logs.push_back(LogTranslator::translate_uniqueness_summary(dlx.solution_count));
     } else {
         result.logs.push_back("Uniqueness check skipped by configuration.");
     }

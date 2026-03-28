@@ -227,8 +227,13 @@ int main(int argc, char** argv) {
             } else {
                 std::cout << "\nUnique: skipped\n\n";
             }
-            std::cout << "Solution count: skipped\n";
-            std::cout << "Count complete: skipped\n\n";
+            if (solver.solution_count() >= 0) {
+                std::cout << "Solution count: " << solver.solution_count() << "\n";
+                std::cout << "Count complete: " << (solver.solution_count_complete() ? "true" : "false") << "\n\n";
+            } else {
+                std::cout << "Solution count: skipped\n";
+                std::cout << "Count complete: skipped\n\n";
+            }
 
             if (emit_logs) {
                 std::cout << "Glassbox solving log:\n";
