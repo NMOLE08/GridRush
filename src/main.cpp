@@ -1,4 +1,5 @@
 #include "bitwise_solver.h"
+#include "classic_dlx_solver.h"
 
 #include <fstream>
 #include <iostream>
@@ -42,7 +43,21 @@ std::vector<int> parse_cells(const json& arr) {
 
 PuzzleDefinition parse_puzzle(const json& j) {
     PuzzleDefinition p;
+    p.category.clear();
     p.givens.fill(0);
+
+    if (j.contains("category")) {
+        p.category = j.at("category").get<std::string>();
+    }
+    if (j.contains("check_uniqueness")) {
+        p.check_uniqueness = j.at("check_uniqueness").get<bool>();
+    }
+    if (j.contains("count_all_solutions")) {
+        p.count_all_solutions = j.at("count_all_solutions").get<bool>();
+    }
+    if (j.contains("max_solution_count")) {
+        p.max_solution_count = j.at("max_solution_count").get<int>();
+    }
 
     if (j.contains("givens_grid")) {
         const auto& grid = j.at("givens_grid");
@@ -151,23 +166,76 @@ int main(int argc, char** argv) {
         in >> j;
 
         PuzzleDefinition puzzle = parse_puzzle(j);
-        sudoku::BitwiseSudokuSolver solver(std::move(puzzle));
+        const bool emit_logs = !j.contains("emit_logs") || j.at("emit_logs").get<bool>();
 
-        if (!solver.solve()) {
-            std::cout << "No valid solution found.\n";
-            for (const auto& line : solver.logs()) {
-                std::cout << line << '\n';
+        const bool wants_classic_dlx = (puzzle.category == "classic")
+            || (puzzle.category.empty() && sudoku::is_classic_only(puzzle));
+
+        if (wants_classic_dlx && sudoku::is_classic_only(puzzle)) {
+            const auto result = sudoku::solve_classic_with_dlx(puzzle);
+            if (!result.solved) {
+                std::cout << "No valid solution found.\n";
+                if (emit_logs) {
+                    std::cout << "Glassbox solving log:\n";
+                    for (const auto& line : result.logs) {
+                        std::cout << line << '\n';
+                    }
+                }
+                return 2;
             }
-            return 2;
-        }
 
-        std::cout << "Solved grid:\n";
-        print_grid(solver.solved_grid());
-        std::cout << "\nUnique: " << (solver.is_unique() ? "true" : "false") << "\n\n";
+            std::cout << "Solved grid:\n";
+            print_grid(result.solved_grid);
+            if (result.uniqueness_checked) {
+                std::cout << "\nUnique: " << (result.unique ? "true" : "false") << "\n\n";
+            } else {
+                std::cout << "\nUnique: skipped\n\n";
+            }
 
-        std::cout << "Glassbox solving log:\n";
-        for (const auto& line : solver.logs()) {
-            std::cout << line << '\n';
+            if (result.solution_count >= 0) {
+                std::cout << "Solution count: " << result.solution_count << "\n";
+                std::cout << "Count complete: " << (result.solution_count_complete ? "true" : "false") << "\n\n";
+            } else {
+                std::cout << "Solution count: skipped\n";
+                std::cout << "Count complete: skipped\n\n";
+            }
+
+            if (emit_logs) {
+                std::cout << "Glassbox solving log:\n";
+                for (const auto& line : result.logs) {
+                    std::cout << line << '\n';
+                }
+            }
+        } else {
+            sudoku::BitwiseSudokuSolver solver(std::move(puzzle));
+
+            if (!solver.solve()) {
+                std::cout << "No valid solution found.\n";
+                if (emit_logs) {
+                    std::cout << "Glassbox solving log:\n";
+                    for (const auto& line : solver.logs()) {
+                        std::cout << line << '\n';
+                    }
+                }
+                return 2;
+            }
+
+            std::cout << "Solved grid:\n";
+            print_grid(solver.solved_grid());
+            if (solver.is_uniqueness_checked()) {
+                std::cout << "\nUnique: " << (solver.is_unique() ? "true" : "false") << "\n\n";
+            } else {
+                std::cout << "\nUnique: skipped\n\n";
+            }
+            std::cout << "Solution count: skipped\n";
+            std::cout << "Count complete: skipped\n\n";
+
+            if (emit_logs) {
+                std::cout << "Glassbox solving log:\n";
+                for (const auto& line : solver.logs()) {
+                    std::cout << line << '\n';
+                }
+            }
         }
 
     } catch (const std::exception& ex) {

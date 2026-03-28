@@ -9,6 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const ROOT = path.resolve(__dirname, '..');
 const IS_WINDOWS = process.platform === 'win32';
+const SOLVER_TIMEOUT_MS = Number(process.env.SOLVER_TIMEOUT_MS || 180000);
 let cachedWindowsRuntimeBin = null;
 const SOLVER_CANDIDATES = [
   path.join(ROOT, 'build-win', 'sudoku_solver.exe'),
@@ -81,8 +82,20 @@ async function resolveWindowsRuntimeBin() {
   }
 }
 
-function buildPuzzlePayload(category, givensGrid, variantData) {
-  const puzzle = { givens_grid: givensGrid };
+function buildPuzzlePayload(category, givensGrid, variantData, checkUniqueness, checkAllSolutions, maxSolutionCount) {
+  const puzzle = {
+    category,
+    check_uniqueness: Boolean(checkUniqueness),
+    emit_logs: true,
+    givens_grid: givensGrid,
+  };
+
+  if (category === 'classic') {
+    puzzle.count_all_solutions = Boolean(checkAllSolutions);
+    if (Number.isInteger(maxSolutionCount) && maxSolutionCount > 0) {
+      puzzle.max_solution_count = maxSolutionCount;
+    }
+  }
 
   switch (category) {
     case 'classic':
@@ -122,7 +135,7 @@ function parseSolverOutput(stdout) {
   const uniqueIdx = lines.findIndex((l) => l.trim().startsWith('Unique:'));
   const logIdx = lines.findIndex((l) => l.trim() === 'Glassbox solving log:');
 
-  if (solvedIdx < 0 || uniqueIdx < 0 || logIdx < 0) {
+  if (solvedIdx < 0 || uniqueIdx < 0) {
     throw new Error('Unexpected solver output format.');
   }
 
@@ -139,12 +152,55 @@ function parseSolverOutput(stdout) {
     return nums;
   });
 
-  const uniqueLine = lines[uniqueIdx].trim();
-  const unique = uniqueLine.toLowerCase().includes('true');
+  const uniqueLine = lines[uniqueIdx].trim().toLowerCase();
+  let unique = null;
+  let uniquenessChecked = false;
+  if (uniqueLine.includes('true')) {
+    unique = true;
+    uniquenessChecked = true;
+  } else if (uniqueLine.includes('false')) {
+    unique = false;
+    uniquenessChecked = true;
+  }
 
-  const logs = lines.slice(logIdx + 1).filter((l) => l.trim().length > 0);
+  const solutionCountIdx = lines.findIndex((l) => l.trim().startsWith('Solution count:'));
+  const countCompleteIdx = lines.findIndex((l) => l.trim().startsWith('Count complete:'));
+  let solutionCount = null;
+  let solutionCountComplete = null;
 
-  return { solvedGrid, unique, logs, raw: stdout };
+  if (solutionCountIdx >= 0) {
+    const raw = lines[solutionCountIdx].split(':').slice(1).join(':').trim().toLowerCase();
+    if (raw !== 'skipped') {
+      const parsed = Number(raw);
+      if (Number.isInteger(parsed) && parsed >= 0) {
+        solutionCount = parsed;
+      }
+    }
+  }
+
+  if (countCompleteIdx >= 0) {
+    const raw = lines[countCompleteIdx].split(':').slice(1).join(':').trim().toLowerCase();
+    if (raw === 'true') {
+      solutionCountComplete = true;
+    } else if (raw === 'false') {
+      solutionCountComplete = false;
+    }
+  }
+
+  const logs = logIdx >= 0
+    ? lines.slice(logIdx + 1).filter((l) => l.trim().length > 0)
+    : [];
+
+  return {
+    solved: true,
+    solvedGrid,
+    unique,
+    uniquenessChecked,
+    solutionCount,
+    solutionCountComplete,
+    logs,
+    raw: stdout,
+  };
 }
 
 function parseNoSolutionOutput(output) {
@@ -157,7 +213,10 @@ function parseNoSolutionOutput(output) {
   return {
     solved: false,
     solvedGrid: null,
-    unique: false,
+    unique: null,
+    uniquenessChecked: false,
+    solutionCount: null,
+    solutionCountComplete: null,
     logs,
     message: 'No valid solution found for the provided constraints.',
     raw: output,
@@ -171,7 +230,16 @@ app.get('/api/health', async (_req, res) => {
 
 app.post('/api/solve', async (req, res) => {
   try {
-    const { category, givensGrid, variantData } = req.body || {};
+    const {
+      category,
+      givensGrid,
+      variantData,
+      checkUniqueness,
+      checkAllSolutions,
+      maxSolutionCount,
+      includeLogs,
+    } = req.body || {};
+    const shouldIncludeLogs = includeLogs !== false;
 
     if (typeof category !== 'string') {
       return res.status(400).json({ ok: false, error: 'category is required.' });
@@ -181,7 +249,15 @@ app.post('/api/solve', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'givensGrid must be a 9x9 matrix of integers 0..9.' });
     }
 
-    const puzzle = buildPuzzlePayload(category, givensGrid, variantData || {});
+    const puzzle = buildPuzzlePayload(
+      category,
+      givensGrid,
+      variantData || {},
+      checkUniqueness,
+      checkAllSolutions,
+      maxSolutionCount
+    );
+    puzzle.emit_logs = shouldIncludeLogs;
     const solverBin = await resolveSolverBinary();
 
     if (!solverBin) {
@@ -209,7 +285,7 @@ app.post('/api/solve', async (req, res) => {
     ].filter(Boolean).join(pathDelimiter);
 
     execFile(solverBin, [tmpFile], {
-      timeout: 120000,
+      timeout: SOLVER_TIMEOUT_MS,
       env: { ...process.env, PATH: childPath },
     }, async (err, stdout, stderr) => {
       await fs.rm(tmpFile, { force: true });
@@ -217,8 +293,35 @@ app.post('/api/solve', async (req, res) => {
       if (err) {
         const output = `${stdout || ''}\n${stderr || ''}`.trim();
 
+        if (err.code === 'ETIMEDOUT' || err.killed) {
+          const timeoutResult = {
+            ok: true,
+            solved: false,
+            solvedGrid: null,
+            unique: null,
+            uniquenessChecked: false,
+            solutionCount: null,
+            solutionCountComplete: null,
+            timedOut: true,
+            logs: output ? output.split(/\r?\n/).filter((line) => line.trim().length > 0) : [],
+            message: `Solver timed out after ${SOLVER_TIMEOUT_MS}ms. This puzzle is likely under-constrained or too expensive to prove uniqueness. Add more givens/constraints and try again.`,
+            raw: output,
+          };
+          if (!shouldIncludeLogs) {
+            timeoutResult.logs = [];
+            delete timeoutResult.raw;
+            timeoutResult.logsSuppressed = true;
+          }
+          return res.json(timeoutResult);
+        }
+
         if (err.code === 2 || output.includes('No valid solution found.')) {
           const parsed = parseNoSolutionOutput(output);
+          if (!shouldIncludeLogs) {
+            parsed.logs = [];
+            delete parsed.raw;
+            parsed.logsSuppressed = true;
+          }
           return res.json({ ok: true, ...parsed });
         }
 
@@ -231,6 +334,11 @@ app.post('/api/solve', async (req, res) => {
 
       try {
         const parsed = parseSolverOutput(stdout);
+        if (!shouldIncludeLogs) {
+          parsed.logs = [];
+          delete parsed.raw;
+          parsed.logsSuppressed = true;
+        }
         return res.json({ ok: true, ...parsed });
       } catch (parseErr) {
         return res.status(500).json({

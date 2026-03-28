@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -21,10 +22,11 @@ public:
 
     explicit BitwiseSudokuSolver(PuzzleDefinition definition);
 
-    // Solves one solution and checks uniqueness by searching for a second one.
+    // Solves one solution and optionally checks uniqueness.
     bool solve();
 
     bool is_solved() const;
+    bool is_uniqueness_checked() const;
     bool is_unique() const;
 
     std::array<int, kCellCount> solved_grid() const;
@@ -51,6 +53,7 @@ private:
     std::array<bool, kCellCount> in_queue_{};
 
     bool solved_ = false;
+    bool uniqueness_checked_ = false;
     bool unique_ = false;
     std::vector<std::string> logs_;
 
@@ -65,6 +68,11 @@ private:
     bool apply_killer_cage(int cage_idx);
     bool apply_arrow(int arrow_idx);
     bool apply_thermo_bounds(int thermo_idx, int pos);
+    bool killer_support_exists(const KillerCage& cage, int fixed_index, int fixed_digit) const;
+    static bool killer_support_exists_state(const KillerCage& cage,
+                                            const std::array<uint16_t, kCellCount>& state,
+                                            int fixed_index,
+                                            int fixed_digit);
 
     bool remove_candidates(int cell, uint16_t remove_mask, const std::string& reason);
     void log_candidate_removal(int cell, int digit, const std::string& reason);

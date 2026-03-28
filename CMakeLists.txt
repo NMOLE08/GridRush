@@ -19,6 +19,7 @@ endif()
 add_executable(sudoku_solver
     src/main.cpp
     src/bitwise_solver.cpp
+    src/classic_dlx_solver.cpp
 )
 
 target_include_directories(sudoku_solver PRIVATE include)

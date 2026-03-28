@@ -39,6 +39,7 @@ BitwiseSudokuSolver::BitwiseSudokuSolver(PuzzleDefinition definition)
 bool BitwiseSudokuSolver::solve() {
     logs_.clear();
     solved_ = false;
+    uniqueness_checked_ = false;
     unique_ = false;
 
     if (!initialize_domains()) {
@@ -61,6 +62,13 @@ bool BitwiseSudokuSolver::solve() {
     }
 
     solved_ = true;
+
+    if (!definition_.check_uniqueness) {
+        logs_.push_back("Uniqueness check skipped by configuration.");
+        return true;
+    }
+
+    uniqueness_checked_ = true;
 
     const auto first_solution = solved_grid();
     std::array<uint16_t, kCellCount> fresh{};
@@ -87,6 +95,10 @@ bool BitwiseSudokuSolver::solve() {
 
 bool BitwiseSudokuSolver::is_solved() const {
     return solved_;
+}
+
+bool BitwiseSudokuSolver::is_uniqueness_checked() const {
+    return uniqueness_checked_;
 }
 
 bool BitwiseSudokuSolver::is_unique() const {
@@ -370,7 +382,8 @@ bool BitwiseSudokuSolver::apply_killer_cage(int cage_idx) {
         }
     }
 
-    // Sum bounds pruning: test each candidate by min/max achievable on remaining cells.
+    // Subset-sum support pruning: keep only values that can participate in a valid
+    // no-repeat cage assignment reaching the target sum.
     for (int idx = 0; idx < static_cast<int>(cage.cells.size()); ++idx) {
         const int cell = cage.cells[idx];
         uint16_t dom = domains_[cell];
@@ -380,32 +393,7 @@ bool BitwiseSudokuSolver::apply_killer_cage(int cage_idx) {
             const uint16_t bit = digit_to_mask(d);
             if ((dom & bit) == 0) continue;
 
-            int min_sum = d;
-            int max_sum = d;
-            bool impossible = false;
-
-            for (int j = 0; j < static_cast<int>(cage.cells.size()); ++j) {
-                if (j == idx) continue;
-                const int other_cell = cage.cells[j];
-                const uint16_t other_dom = domains_[other_cell];
-                int mn = std::numeric_limits<int>::max();
-                int mx = std::numeric_limits<int>::min();
-
-                for (int v = 1; v <= 9; ++v) {
-                    if ((other_dom & digit_to_mask(v)) == 0) continue;
-                    if (v == d) continue; // no-repeat in cage
-                    mn = std::min(mn, v);
-                    mx = std::max(mx, v);
-                }
-                if (mn == std::numeric_limits<int>::max()) {
-                    impossible = true;
-                    break;
-                }
-                min_sum += mn;
-                max_sum += mx;
-            }
-
-            if (impossible || cage.sum < min_sum || cage.sum > max_sum) {
+            if (!killer_support_exists(cage, idx, d)) {
                 remove |= bit;
             }
         }
@@ -419,6 +407,99 @@ bool BitwiseSudokuSolver::apply_killer_cage(int cage_idx) {
     }
 
     return true;
+}
+
+bool BitwiseSudokuSolver::killer_support_exists(const KillerCage& cage, int fixed_index, int fixed_digit) const {
+    const int target_remaining = cage.sum - fixed_digit;
+    if (target_remaining < 0) {
+        return false;
+    }
+
+    std::vector<int> others;
+    others.reserve(cage.cells.size());
+    for (int i = 0; i < static_cast<int>(cage.cells.size()); ++i) {
+        if (i != fixed_index) {
+            others.push_back(cage.cells[i]);
+        }
+    }
+
+    std::sort(others.begin(), others.end(), [&](int a, int b) {
+        return popcount9(domains_[a]) < popcount9(domains_[b]);
+    });
+
+    std::function<bool(int, int, uint16_t)> dfs = [&](int pos, int rem, uint16_t used_mask) -> bool {
+        if (rem < 0) return false;
+        if (pos == static_cast<int>(others.size())) {
+            return rem == 0;
+        }
+
+        const uint16_t dom = domains_[others[pos]];
+        for (int d = 1; d <= 9; ++d) {
+            const uint16_t bit = digit_to_mask(d);
+            if ((dom & bit) == 0) continue;
+            if ((used_mask & bit) != 0) continue;
+            if (d > rem) continue;
+            if (dfs(pos + 1, rem - d, static_cast<uint16_t>(used_mask | bit))) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    return dfs(0, target_remaining, digit_to_mask(fixed_digit));
+}
+
+bool BitwiseSudokuSolver::killer_support_exists_state(const KillerCage& cage,
+                                                      const std::array<uint16_t, kCellCount>& state,
+                                                      int fixed_index,
+                                                      int fixed_digit) {
+    const int target_remaining = cage.sum - fixed_digit;
+    if (target_remaining < 0) {
+        return false;
+    }
+
+    auto popcount_domain = [](uint16_t domain) {
+        int count = 0;
+        for (int d = 1; d <= 9; ++d) {
+            if ((domain & digit_to_mask(d)) != 0) {
+                ++count;
+            }
+        }
+        return count;
+    };
+
+    std::vector<int> others;
+    others.reserve(cage.cells.size());
+    for (int i = 0; i < static_cast<int>(cage.cells.size()); ++i) {
+        if (i != fixed_index) {
+            others.push_back(cage.cells[i]);
+        }
+    }
+
+    std::sort(others.begin(), others.end(), [&](int a, int b) {
+        return popcount_domain(state[a]) < popcount_domain(state[b]);
+    });
+
+    std::function<bool(int, int, uint16_t)> dfs = [&](int pos, int rem, uint16_t used_mask) -> bool {
+        if (rem < 0) return false;
+        if (pos == static_cast<int>(others.size())) {
+            return rem == 0;
+        }
+
+        const uint16_t dom = state[others[pos]];
+        for (int d = 1; d <= 9; ++d) {
+            const uint16_t bit = digit_to_mask(d);
+            if ((dom & bit) == 0) continue;
+            if ((used_mask & bit) != 0) continue;
+            if (d > rem) continue;
+            if (dfs(pos + 1, rem - d, static_cast<uint16_t>(used_mask | bit))) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    return dfs(0, target_remaining, digit_to_mask(fixed_digit));
 }
 
 bool BitwiseSudokuSolver::apply_arrow(int arrow_idx) {
@@ -780,28 +861,7 @@ bool BitwiseSudokuSolver::propagate_state(std::array<uint16_t, kCellCount>& stat
                 for (int d = 1; d <= 9; ++d) {
                     uint16_t bit = digit_to_mask(d);
                     if ((dom & bit) == 0) continue;
-                    int min_sum = d;
-                    int max_sum = d;
-                    bool impossible = false;
-                    for (int j = 0; j < static_cast<int>(cage.cells.size()); ++j) {
-                        if (j == idx) continue;
-                        uint16_t od = state[cage.cells[j]];
-                        int mn = 100;
-                        int mx = -1;
-                        for (int v = 1; v <= 9; ++v) {
-                            if ((od & digit_to_mask(v)) == 0) continue;
-                            if (v == d) continue;
-                            mn = std::min(mn, v);
-                            mx = std::max(mx, v);
-                        }
-                        if (mx < 0) {
-                            impossible = true;
-                            break;
-                        }
-                        min_sum += mn;
-                        max_sum += mx;
-                    }
-                    if (impossible || cage.sum < min_sum || cage.sum > max_sum) {
+                    if (!killer_support_exists_state(cage, state, idx, d)) {
                         remove |= bit;
                     }
                 }

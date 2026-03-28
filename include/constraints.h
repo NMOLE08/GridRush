@@ -45,6 +45,10 @@ struct KropkiDot {
 };
 
 struct PuzzleDefinition {
+    std::string category;
+    bool check_uniqueness = false;
+    bool count_all_solutions = false;
+    int max_solution_count = 5000;
     std::array<uint16_t, kCellCount> givens{}; // zero means unspecified, otherwise single-bit domain
     std::vector<int> even_cells;
     std::vector<int> odd_cells;
