@@ -83,6 +83,18 @@ async function resolveWindowsRuntimeBin() {
 }
 
 function buildPuzzlePayload(category, givensGrid, variantData, checkUniqueness, checkAllSolutions, maxSolutionCount) {
+  const pickThermos = (data) => {
+    if (Array.isArray(data?.thermos)) return data.thermos;
+    if (Array.isArray(data?.thermo)) return data.thermo;
+    return [];
+  };
+
+  const pickArrows = (data) => {
+    if (Array.isArray(data?.arrows)) return data.arrows;
+    if (Array.isArray(data?.arrow)) return data.arrow;
+    return [];
+  };
+
   const puzzle = {
     category,
     check_uniqueness: Boolean(checkUniqueness),
@@ -108,10 +120,10 @@ function buildPuzzlePayload(category, givensGrid, variantData, checkUniqueness, 
       puzzle.killer_cages = Array.isArray(variantData?.killer_cages) ? variantData.killer_cages : [];
       break;
     case 'thermo':
-      puzzle.thermos = Array.isArray(variantData?.thermos) ? variantData.thermos : [];
+      puzzle.thermos = pickThermos(variantData);
       break;
     case 'arrow':
-      puzzle.arrows = Array.isArray(variantData?.arrows) ? variantData.arrows : [];
+      puzzle.arrows = pickArrows(variantData);
       break;
     case 'kropki':
       puzzle.kropki = Array.isArray(variantData?.kropki) ? variantData.kropki : [];
@@ -119,6 +131,9 @@ function buildPuzzlePayload(category, givensGrid, variantData, checkUniqueness, 
     case 'hybrid':
       if (variantData && typeof variantData === 'object') {
         Object.assign(puzzle, variantData);
+        // Accept singular aliases users commonly type in the JSON editor.
+        puzzle.thermos = pickThermos(variantData);
+        puzzle.arrows = pickArrows(variantData);
       }
       break;
     default:
