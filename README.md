@@ -4,6 +4,26 @@ Need the shortest setup path?
 
 1. Start with [docs/QUICKSTART.md](docs/QUICKSTART.md)
 
+## Required After Clone
+
+After cloning this repository, build the C++ solver backend before `npm start`.
+If you do not, you can get this runtime error:
+
+`Solver binary not found. Build backend first with cmake -S . -B build && cmake --build build`
+
+From repository root, run:
+
+```bash
+cmake -S . -B build
+cmake --build build
+```
+
+Or as a single command:
+
+```bash
+cmake -S . -B build && cmake --build build
+```
+
 GridRush is a full-stack Sudoku variant solver with:
 
 1. C++ solver core (classic + variants + uniqueness/count support)

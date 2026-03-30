@@ -2,6 +2,19 @@
 
 This is the fastest path to run the app from a fresh clone.
 
+## Required After Clone
+
+Before running `npm start`, you must build the C++ solver backend at least once.
+If you skip this step, the app will show:
+
+`Solver binary not found. Build backend first with cmake -S . -B build && cmake --build build`
+
+Run this command from project root:
+
+```bash
+cmake -S . -B build && cmake --build build
+```
+
 ## 1) Prerequisites
 
 Install these first:
@@ -36,6 +49,13 @@ cmake --build build-win
 ```
 
 ### macOS
+
+```bash
+cmake -S . -B build
+cmake --build build
+```
+
+Quick fix command (works on both Windows and macOS from project root):
 
 ```bash
 cmake -S . -B build
