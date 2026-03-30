@@ -5,6 +5,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(MSVC)
+    add_compile_options($<$<CONFIG:Release>:/O2> $<$<CONFIG:Release>:/Ot> $<$<CONFIG:Release>:/GL>)
+    add_link_options($<$<CONFIG:Release>:/LTCG>)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options($<$<CONFIG:Release>:-O3> $<$<CONFIG:Release>:-march=native>)
+endif()
+
 find_package(nlohmann_json CONFIG QUIET)
 
 if(NOT nlohmann_json_FOUND)
@@ -18,8 +25,8 @@ endif()
 
 add_executable(sudoku_solver
     src/main.cpp
+    src/Solver.cpp
     src/bitwise_solver.cpp
-    src/classic_dlx_solver.cpp
 )
 
 target_include_directories(sudoku_solver PRIVATE include)
